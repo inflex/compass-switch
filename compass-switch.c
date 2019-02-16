@@ -21,6 +21,7 @@
  *
  */
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,7 @@
 #include <arpa/inet.h>
 #include <linux/i2c-dev.h>
 #include <linux/limits.h>
-#include <linux/input.h>
+//#include <linux/input.h>
 #include <linux/uinput.h>
 #include <dirent.h>
 
@@ -69,22 +70,37 @@ struct glb {
 };
 
 static int gdebug = 0;
+static int exit_program = 0;
 
+void int_handler(int dummy) {
+	fprintf(stderr,"\nExit requested\n");
+	exit_program = 1;
+}
+
+int uinput_done( struct glb *g ) {
+	int r = 0;
+	fprintf(stderr,"Cleaning up\n");
+	r = ioctl(g->keyboard, UI_DEV_DESTROY);
+	if (r < 0) fprintf(stderr,"Error cleaning up uinput (%s)\n", strerror(errno));
+	close(g->keyboard);
+	return 0;
+}
 
 int uinput_init( struct glb *g ) {
 	g->keyboard = open("/dev/uinput", O_WRONLY|O_NONBLOCK);
 
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_KEY);
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
-	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTSHIFT);
 	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F5);
 	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F6);
+	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTSHIFT);
+	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTCTRL);
 
 	memset(&(g->usetup), 0, sizeof(g->usetup));
 	g->usetup.id.bustype = BUS_USB;
 	g->usetup.id.vendor = 0x1234;
 	g->usetup.id.product = 0x5678;
-	strcpy(g->usetup.name, "Compass Switch");
+	strcpy(g->usetup.name, "HMC5833L Compass Switch");
 
 	ioctl(g->keyboard, UI_DEV_SETUP, &g->usetup);
 	ioctl(g->keyboard, UI_DEV_CREATE);
@@ -112,11 +128,13 @@ void emit( int fd, int type, int code, int val ) {
 int press_keys( struct glb *g, int key ) {
 
 	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 1);
+	emit(g->keyboard, EV_KEY, KEY_LEFTCTRL, 1);
 	emit(g->keyboard, EV_KEY, key, 1);
 	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
-	usleep(100000);
+	usleep(150000);
 	emit(g->keyboard, EV_KEY, key, 0);
 	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 0);
+	emit(g->keyboard, EV_KEY, KEY_LEFTCTRL, 0);
 	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
 
 	return 0;
@@ -340,6 +358,8 @@ int main(int argc, char **argv) {
 	g->end_angle = -1;
 	g->scene_state = SCENE_INACTIVE;
 
+	signal(SIGINT, int_handler);
+
 	parse_parameters(g, argc, argv);
 
 	gdebug = g->debug;
@@ -397,7 +417,7 @@ int main(int argc, char **argv) {
 			fprintf(stdout, "\r\n"); fflush(stdout);
 		}
 
-		while (1) { 
+		while (!exit_program) { 
 			double heading;
 
 			i2c_read_register(file, 0x03, buf, 6);
@@ -431,6 +451,8 @@ int main(int argc, char **argv) {
 			usleep(HMC5833L_FRAME_SLEEP);
 		}
 	}
+
+	uinput_done(g);
 
 
 	return 0;
