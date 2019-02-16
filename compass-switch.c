@@ -437,13 +437,13 @@ int main(int argc, char **argv) {
 			if ((heading > g->start_angle) && (heading < g->end_angle)) {
 				if (g->scene_state == SCENE_INACTIVE) {
 					g->scene_state = SCENE_ACTIVE;
-					fprintf(stderr,"\nACTIVE\n");
+					VERBOSE fprintf(stdout,"\nACTIVE\n");
 					press_keys( g, KEY_F5 );
 				}
 			} else {
 				if (g->scene_state == SCENE_ACTIVE) {
 					g->scene_state = SCENE_INACTIVE;
-					fprintf(stderr,"\nIN-ACTIVE\n");
+					VERBOSE fprintf(stdout,"\nIN-ACTIVE\n");
 					press_keys( g, KEY_F6 );
 				}
 			}
