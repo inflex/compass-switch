@@ -113,11 +113,11 @@ int press_keys( struct glb *g, int key ) {
 
 	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 1);
 	emit(g->keyboard, EV_KEY, key, 1);
-	emit(g->keyboard, EV_SNY, SYN_REPORT, 0);
+	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
 	usleep(100000);
 	emit(g->keyboard, EV_KEY, key, 0);
 	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 0);
-	emit(g->keyboard, EV_SNY, SYN_REPORT, 0);
+	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
 
 	return 0;
 
