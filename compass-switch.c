@@ -35,9 +35,9 @@
 #include <arpa/inet.h>
 #include <linux/i2c-dev.h>
 #include <linux/limits.h>
-#include <X11/Xlib.h>
-#include <X11/extensions/XTest.h>
-#include <X11/keysym.h>
+#include <linux/input.h>
+#include <linux/uinput.h>
+#include <dirent.h>
 
 #define SCENE_INACTIVE 0
 #define SCENE_ACTIVE 1
@@ -50,6 +50,9 @@
 #define HMC5833L_FRAME_SLEEP 80000 // a little more than the 67ms suggested by datasheet
 
 struct glb {
+	int keyboard;  // file handle for keyboard
+	struct uinput_setup usetup;  // input dev struct
+
 	int debug; // debugging *duh*
 	int verbose;
 	int quiet;
@@ -61,63 +64,64 @@ struct glb {
 	int start_angle;
 	int end_angle;
 
-	Display *display;
 	int kmods; // 0:ctrl, 1:alt, 2:shift
 	int key; // key scan code
 };
 
 static int gdebug = 0;
 
-XKeyEvent createKeyEvent(Display *display, Window win, Window winRoot, int press, int keycode, int modifiers) {
-	XKeyEvent event;
 
-	event.display     = display;
-	event.window      = win;
-	event.root        = winRoot;
-	event.subwindow   = None;
-	event.time        = CurrentTime;
-	event.x           = 1;
-	event.y           = 1;
-	event.x_root      = 1;
-	event.y_root      = 1;
-	event.same_screen = True;
-//	event.same_screen = False;
-	event.keycode     = XKeysymToKeycode(display, keycode);
-	event.state       = modifiers;
+int uinput_init( struct glb *g ) {
+	g->keyboard = open("/dev/uinput", O_WRONLY|O_NONBLOCK);
 
-	if(press)
-		event.type = KeyPress;
-	else
-		event.type = KeyRelease;
+	ioctl(g->keyboard, UI_SET_EVBIT, EV_KEY);
+	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
+	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTSHIFT);
+	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F5);
+	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F6);
 
-	return event;
+	memset(&(g->usetup), 0, sizeof(g->usetup));
+	g->usetup.id.bustype = BUS_USB;
+	g->usetup.id.vendor = 0x1234;
+	g->usetup.id.product = 0x5678;
+	strcpy(g->usetup.name, "Compass Switch");
+
+	ioctl(g->keyboard, UI_DEV_SETUP, &g->usetup);
+	ioctl(g->keyboard, UI_DEV_CREATE);
+
+	return 0;
 }
 
-void keypress( struct glb *g, int keycode, int state ) {
-	XKeyEvent event;
-	Window winFocus;
-	int modifiers = ShiftMask;
-	int revert;
+/*
+ * Linux uinput module code
+ *
+ */
 
-	Window winRoot = XDefaultRootWindow(g->display);
-	XGetInputFocus(g->display, &winFocus, &revert);
+void emit( int fd, int type, int code, int val ) {
+	struct input_event ie;
 
-	event = createKeyEvent(g->display, winFocus, winRoot, state, keycode, modifiers);
-	XSendEvent(event.display, event.window, True, KeyPressMask, (XEvent *)&event);
+	ie.type = type;
+	ie.code = code;
+	ie.value = val;
+	ie.time.tv_sec = 0;
+	ie.time.tv_usec = 0;
+
+	write(fd, &ie, sizeof(ie));
 }
 
-void keypress_simulate(struct glb *g, int keycode ) {
+int press_keys( struct glb *g, int key ) {
 
-//	keypress(g, XK_Shift_L, 1);
-	keypress(g, keycode, 1);
-	XFlush(g->display);
+	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 1);
+	emit(g->keyboard, EV_KEY, key, 1);
+	emit(g->keyboard, EV_SNY, SYN_REPORT, 0);
 	usleep(100000);
-	keypress(g, keycode, 0);
-//	keypress(g, XK_Shift_L, 0);
-	XFlush(g->display);
+	emit(g->keyboard, EV_KEY, key, 0);
+	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 0);
+	emit(g->keyboard, EV_SNY, SYN_REPORT, 0);
+
+	return 0;
 
 }
-
 
 static int i2c_open_bus( int bus ) {
 	int file;
@@ -335,11 +339,6 @@ int main(int argc, char **argv) {
 	g->start_angle = -1;
 	g->end_angle = -1;
 	g->scene_state = SCENE_INACTIVE;
-	g->display = XOpenDisplay(0);
-	if (!g->display) {
-		fprintf(stderr,"Could not get X display (%s)\n", strerror(errno));
-		return 1;
-	}
 
 	parse_parameters(g, argc, argv);
 
@@ -370,6 +369,8 @@ int main(int argc, char **argv) {
 		VERBOSE fprintf(stderr,"Could not find the compass chip.\n");
 		exit(1);
 	}
+
+	uinput_init(g);
 
 	{
 		unsigned char buf[512];
@@ -416,30 +417,14 @@ int main(int argc, char **argv) {
 			if ((heading > g->start_angle) && (heading < g->end_angle)) {
 				if (g->scene_state == SCENE_INACTIVE) {
 					g->scene_state = SCENE_ACTIVE;
-					/* One shot, hit the key */
 					fprintf(stderr,"\nACTIVE\n");
-				//	keypress_simulate(g, XK_F5);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_Shift_L), True, CurrentTime);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_F5), True, CurrentTime);
-					XFlush(g->display);
-					usleep(100000);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_F5), False, CurrentTime);  
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_Shift_L), False, CurrentTime);
-					XFlush(g->display);
+					press_keys( g, KEY_F5 );
 				}
 			} else {
 				if (g->scene_state == SCENE_ACTIVE) {
 					g->scene_state = SCENE_INACTIVE;
-					/* One shot, hit the key */
 					fprintf(stderr,"\nIN-ACTIVE\n");
-				//	keypress_simulate(g, XK_F6);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_Shift_L), True, CurrentTime);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_F6), True, CurrentTime);
-					XFlush(g->display);
-					usleep(100000);
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_F6), False, CurrentTime);  
-					XTestFakeKeyEvent(g->display, XKeysymToKeycode(g->display, XK_Shift_L), False, CurrentTime);
-					XFlush(g->display);
+					press_keys( g, KEY_F6 );
 				}
 			}
 
