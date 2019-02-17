@@ -33,12 +33,12 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <math.h>
-#include <arpa/inet.h>
 #include <linux/i2c-dev.h>
 #include <linux/limits.h>
-//#include <linux/input.h>
 #include <linux/uinput.h>
 #include <dirent.h>
+
+#include "i2c.h"
 
 #define SCENE_INACTIVE 0
 #define SCENE_ACTIVE 1
@@ -115,6 +115,7 @@ int uinput_init( struct glb *g ) {
 
 void emit( int fd, int type, int code, int val ) {
 	struct input_event ie;
+	ssize_t bc;
 
 	ie.type = type;
 	ie.code = code;
@@ -122,7 +123,10 @@ void emit( int fd, int type, int code, int val ) {
 	ie.time.tv_sec = 0;
 	ie.time.tv_usec = 0;
 
-	write(fd, &ie, sizeof(ie));
+	bc = write(fd, &ie, sizeof(ie));
+	if (bc != sizeof(ie)) {
+		fprintf(stderr,"Attempted to write %ld bytes to keyboard event queue, only wrote %ld\n", sizeof(ie), bc);
+	}
 }
 
 int press_keys( struct glb *g, int key ) {
@@ -140,107 +144,6 @@ int press_keys( struct glb *g, int key ) {
 	return 0;
 
 }
-
-static int i2c_open_bus( int bus ) {
-	int file;
-	char filename[PATH_MAX];
-	snprintf(filename, sizeof(filename), "/dev/i2c-%d", bus);
-	if ((file = open(filename, O_RDWR)) < 0) {
-		DBG fprintf(stderr,"Failed to open the i2c bus (%s)\n", strerror(errno));
-	}
-
-	return file;
-}
-
-int i2c_close_bus( int bus ) {
-	return close(bus);
-}
-
-
-static int i2c_set_device(int busfd, int addr) {
-	int ret = ioctl(busfd, I2C_SLAVE, addr);
-	if (ret < 0) {
-		DBG fprintf(stderr,"Failed to acquire bus access and/or talk to slave. (%s)\n", strerror(errno));
-	}
-
-	return ret;
-}
-
-static int i2c_read_bus(int busfd, unsigned char *buf, int bufsize) {
-	return read(busfd, buf, bufsize);
-}
-
-static int i2c_write_bus(int busfd, unsigned char *buf, int bufsize) {
-	return write(busfd, buf, bufsize);
-}
-
-static int i2c_read_register(int busfd, uint8_t reg, unsigned char *buf, int bufsize) {
-	int ret;
-
-	ret = i2c_write_bus(busfd, &reg, 1);
-	if (ret < 0) {
-		DBG fprintf(stderr,"Failed to write register address %02x (%s)\n", reg, strerror(errno));
-		return ret;
-	}
-
-	return i2c_read_bus(busfd, buf, bufsize);
-}
-
-int16_t twos2dec_16( unsigned char *raw ) {
-
-	/*
-	 * Convert 2's complement big-endian 16-bit integer
-	 * in to a 16-bit int (intel)
-	 *
-	 * We have to first see if the high bit is set to 
-	 * indicate a negative number, if it is, we need
-	 * to invert the bits in both bytes, assemble in to
-	 * a little-endian integer, and *then* add 1 to the
-	 * result and cast back in to a 16-bit integer.
-	 *
-	 * For non-negative numbers, we can just assemble 
-	 * the two bytes in to  little-endian form and 
-	 * cast to 16-bit int.
-	 *
-	 */
-
-	uint32_t tmp = 0;
-	int16_t result = 0;
-
-	if ((raw[0] & 0x80) == 0x80) {
-		// high bit is set, negative number
-		raw[0] = ~(raw[0]);
-		raw[1] = ~(raw[1]);
-		tmp = (raw[0] << 8) | raw[1];
-		result = (int16_t)(tmp +1);
-		result = -result;
-
-	} else {
-		// no high bit set, just assemble normally
-		result = (int16_t)((raw[0] << 8) | raw[1]);
-	}
-
-	return result;
-}
-
-int i2c_write_register_byte( int fh, uint8_t reg, uint8_t data ) {
-	/*
-	 * Write a byte value to a register with an 8-bit address
-	 *
-	 */
-	unsigned char buf[2];
-	ssize_t ws = 0;
-
-	buf[0] = reg;
-	buf[1] = data;
-	ws = i2c_write_bus(fh, buf, 2);
-	if (ws != 2) {
-		DBG fprintf(stderr,"Couldn't write register address [ %x ] (%s)\n", reg, strerror(errno)); 
-	}
-
-	return ws;
-}
-
 
 int is_hmc5883( int file ) {
 	/*
@@ -301,7 +204,7 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					if (i < argc) {
 						g->start_angle = atoi(argv[i]);
 					} else {
-						fprintf(stdout,"Insufficient parameters; -s <start angle (0:360)>\n");
+						fprintf(stdout,"Insufficient parameters; -s <start angle (0..360)>\n");
 						exit(1);
 					}
 					break;
@@ -311,7 +214,7 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					if (i < argc) {
 						g->end_angle = atoi(argv[i]);
 					} else {
-						fprintf(stdout,"Insufficient parameters; -e <end angle (0:360)>\n");
+						fprintf(stdout,"Insufficient parameters; -e <end angle (0..360)>\n");
 						exit(1);
 					}
 					break;
@@ -421,9 +324,8 @@ int main(int argc, char **argv) {
 			double heading;
 
 			i2c_read_register(file, 0x03, buf, 6);
-			x = twos2dec_16(buf);
-			//z = twos2dec_16(buf +2); // Z isn't used in our setup
-			y = twos2dec_16(buf +4);
+			x = i2c_twos2dec_16(buf);
+			y = i2c_twos2dec_16(buf +4);
 
 			heading = atan2(x, y) *(180.0 / M_PI);
 			if (heading < 0) heading += 360;
