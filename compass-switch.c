@@ -44,9 +44,9 @@
 #define SCENE_INACTIVE 0
 #define SCENE_ACTIVE 1
 
-#define VERBOSE if (g->verbose)
-#define DBG if (gdebug)
-#define QUIET if (g->quiet)
+#define VERBOSE if (g->verbose > 0)
+#define DBG if (gdebug > 0)
+#define QUIET if (g->quiet > 0)
 
 #define HMC5883L_ID 0x1e
 #define HMC5833L_FRAME_SLEEP 80000 // a little more than the 67ms suggested by datasheet
@@ -101,10 +101,10 @@ int uinput_init( struct glb *g ) {
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
 
 	kv = g->keys_active;
-	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); fprintf(stderr,"Adding %d\n", *kv); kv++; }
+	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); kv++; }
 
 	kv = g->keys_inactive;
-	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); fprintf(stderr,"Adding %d\n", *kv); kv++; }
+	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); kv++; }
 
 
 	memset(&(g->usetup), 0, sizeof(g->usetup));
@@ -144,23 +144,23 @@ int press_keys( int fd, int *keyvalues ) {
 
 	int *kv = keyvalues;
 	while (*kv) {
-		fprintf(stderr,"%d ", *kv);
+		DBG fprintf(stderr,"%d ", *kv);
 		emit(fd, EV_KEY, *kv, 1);
 		kv++;
 	}
 	emit(fd, EV_SYN, SYN_REPORT, 0);
-	fprintf(stderr,"\n");
+	DBG fprintf(stderr,"\n");
 
 	usleep(150000);
 
 	kv = keyvalues;
 	while (*kv) {
-		fprintf(stderr,"%d ", *kv);
+		DBG fprintf(stderr,"%d ", *kv);
 		emit(fd, EV_KEY, *kv, 0);
 		kv++;
 	}
 	emit(fd, EV_SYN, SYN_REPORT, 0);
-	fprintf(stderr,"\n");
+	DBG fprintf(stderr,"\n");
 
 	return 0;
 
@@ -186,6 +186,27 @@ int is_hmc5883( int file ) {
 }
 
 void show_help(void) {
+	fprintf(stdout,"\n"
+			"compass-switch -s <start angle> -e <end angle> <--active-key <keys>> <--inactive-key <keys>> [-b <bus id>] [-v] [-d] \n"
+			"\n"
+			"\tYou may have to run this as root/sudo to gain access to the i2c bus\n"
+			"\n"
+			"\t-s <start angle> : Start angle of the active area, 0~360 degrees\n"
+			"\t-e <end angle> : End angle of the active area, 0~360 degrees\n"
+			"\n"
+			"\t--active-key <keys>\n"
+			"\t--inactive-key <keys>\n"
+			"\t\tKeys can be up to 5 combination such as CTRL:ALT:SHIFT:F6.\n"
+			"\t\tNOTE: Non-modifier key must be the last one in sequence\n"
+			"\n"
+			"\t-b <bus> : Bus is integer ID of i2c bus in linux\n"
+			"\n"
+			"\t-d : enable debug output\n"
+			"\t-v : enable verbose output\n"
+			"\n"
+			"example usage: sudo ./compass-switch -s 90 -e 180 --active-key CTRL:ALT:F6 --inactive-key CTRL:ALT:F7\n"
+			"\n");
+	
 }
 
 
@@ -209,7 +230,7 @@ int tokenise_keycodes( int *keyvalues, int maxvalues, char *keycodes ) {
 				fprintf(stderr,"Unknown keycode '%s'\n", p );
 			} else {
 				keyvalues[i] = temp_keyvalue;
-				fprintf(stderr," '%s' converted to '%d'\n", p, keyvalues[i]);
+				DBG fprintf(stderr," '%s' converted to '%d'\n", p, keyvalues[i]);
 				i++;
 				if (hit) p = hit+1;
 			}
@@ -222,6 +243,7 @@ int tokenise_keycodes( int *keyvalues, int maxvalues, char *keycodes ) {
 
 int parse_parameters( struct glb *g, int argc, char **argv ) {
 	int i;
+
 
 	for (i = 0; i < argc; i++) {
 		if (argv[i][0] == '-') {
@@ -249,8 +271,7 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 
 				case 's':
 					/* 
-					 * output file where this program will put the text
-					 * line containing the information FlexBV will want 
+					 * start angle of active area/arc
 					 *
 					 */
 					i++;
@@ -281,6 +302,7 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 						i++;
 						tokenise_keycodes( g->keys_inactive, sizeof(g->keys_inactive), argv[i]);
 					}
+					break;
 
 				case 'd': g->debug = 1; g->verbose = 1; break;
 
@@ -317,6 +339,11 @@ int main(int argc, char **argv) {
 
 	signal(SIGINT, int_handler);
 
+	if (argc == 1) {
+		show_help();
+		return 0;
+	}
+
 	parse_parameters(g, argc, argv);
 
 	gdebug = g->debug;
@@ -325,19 +352,19 @@ int main(int argc, char **argv) {
 	if (g->ubus) bid = g->ubus;
 
 	do {
-		VERBOSE fprintf(stderr,"Trying i2c bus ID %d...", bid);
+		DBG fprintf(stderr,"Trying i2c bus ID %d...", bid);
 		file = i2c_open_bus(bid);
 		if (file > 0) {
 			if (i2c_set_device(file, HMC5883L_ID) >= 0) {
 				if (is_hmc5883(file)) {
-					VERBOSE fprintf(stderr,"Success\n");
+					DBG fprintf(stderr,"Success\n");
 					found = 1;
 					break;
 				}
 			}
 			i2c_close_bus(file);
 		}
-		VERBOSE fprintf(stderr,"fail\n");
+		DBG fprintf(stderr,"fail\n");
 		if (g->ubus >= 0) break;
 		bid++;
 	} while ((bid < 16) && (!found));
