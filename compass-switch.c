@@ -124,7 +124,7 @@ int uinput_init( struct glb *g ) {
  *
  */
 
-void emit( int fd, int type, int code, int val ) {
+void uinput_emit( int fd, int type, int code, int val ) {
 	struct input_event ie;
 	ssize_t bc;
 
@@ -140,15 +140,15 @@ void emit( int fd, int type, int code, int val ) {
 	}
 }
 
-int press_keys( int fd, int *keyvalues ) {
+int uinput_press_keys( int fd, int *keyvalues ) {
 
 	int *kv = keyvalues;
 	while (*kv) {
 		CCDBG fprintf(stderr,"%d ", *kv);
-		emit(fd, EV_KEY, *kv, 1);
+		uinput_emit(fd, EV_KEY, *kv, 1);
 		kv++;
 	}
-	emit(fd, EV_SYN, SYN_REPORT, 0);
+	uinput_emit(fd, EV_SYN, SYN_REPORT, 0);
 	CCDBG fprintf(stderr,"\n");
 
 	usleep(150000);
@@ -156,10 +156,10 @@ int press_keys( int fd, int *keyvalues ) {
 	kv = keyvalues;
 	while (*kv) {
 		CCDBG fprintf(stderr,"%d ", *kv);
-		emit(fd, EV_KEY, *kv, 0);
+		uinput_emit(fd, EV_KEY, *kv, 0);
 		kv++;
 	}
-	emit(fd, EV_SYN, SYN_REPORT, 0);
+	uinput_emit(fd, EV_SYN, SYN_REPORT, 0);
 	CCDBG fprintf(stderr,"\n");
 
 	return 0;
@@ -423,13 +423,13 @@ int main(int argc, char **argv) {
 				if (g->scene_state == SCENE_INACTIVE) {
 					g->scene_state = SCENE_ACTIVE;
 					VERBOSE fprintf(stdout,"\nACTIVE\n");
-					press_keys( g->keyboard, g->keys_active );
+					uinput_press_keys( g->keyboard, g->keys_active );
 				}
 			} else {
 				if (g->scene_state == SCENE_ACTIVE) {
 					g->scene_state = SCENE_INACTIVE;
 					VERBOSE fprintf(stdout,"\nIN-ACTIVE\n");
-					press_keys( g->keyboard, g->keys_inactive );
+					uinput_press_keys( g->keyboard, g->keys_inactive );
 				}
 			}
 
