@@ -3,7 +3,7 @@ Compass switch, HMC5833L IC via I2C for Linux PC
 
 Created as an automatic switching system for use with Openbroadcaster and a boom mounted microscope assembly.  Utilises the Linux uinput event system to simulate keypresses that OBS will detect to scene switch.
 
-Designed with the ATTINY85 Module Development Board ( Digispark ), but no reason it cannot work with any other I2C interface device that is supported.
+Designed with the ATTINY85 Module Development Board ( Digispark -   https://www.kickstarter.com/projects/digistump/digispark-the-tiny-arduino-enabled-usb-dev-board ), but no reason it cannot work with any other I2C interface device that is supported.
 
 Source also contains two small/useful code files:
 - i2c interface code ( i2c.[ch] )
