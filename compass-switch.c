@@ -52,6 +52,7 @@
 #define HMC5833L_FRAME_SLEEP 80000 // a little more than the 67ms suggested by datasheet
 
 #define MAX_KEYS 5
+#define TOKENISING_CHAR ':'   // some people might prefer '_' or '+' etc
 
 struct glb {
 	int keyboard;  // file handle for keyboard
@@ -80,13 +81,13 @@ int gdebug = 0;
 int exit_program = 0;
 
 void int_handler(int dummy) {
-	fprintf(stderr,"\nExit requested\n");
+	CCDBG fprintf(stderr,"\nExit requested\n");
 	exit_program = 1;
 }
 
 int uinput_done( struct glb *g ) {
 	int r = 0;
-	fprintf(stderr,"Cleaning up\n");
+	CCDBG fprintf(stderr,"Cleaning up\n");
 	r = ioctl(g->keyboard, UI_DEV_DESTROY);
 	if (r < 0) fprintf(stderr,"Error cleaning up uinput (%s)\n", strerror(errno));
 	close(g->keyboard);
@@ -100,6 +101,14 @@ int uinput_init( struct glb *g ) {
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_KEY);
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
 
+	/*
+	 * For ever key we need to simulate, we need
+	 * to add it to the list of UI_SET_KEYBITs.
+	 *
+	 * There will be some duplication here but there's
+	 * no point in worrying about it.
+	 *
+	 */
 	kv = g->keys_active;
 	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); kv++; }
 
@@ -107,6 +116,12 @@ int uinput_init( struct glb *g ) {
 	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); kv++; }
 
 
+	/*
+	 * Setup the uinput device.  This should show up
+	 * in dmesg;
+	 *	 input: HMC5833L Compass Switch as /devices/virtual/input/input67
+	 *
+	 */
 	memset(&(g->usetup), 0, sizeof(g->usetup));
 	g->usetup.id.bustype = BUS_USB;
 	g->usetup.id.vendor = 0x1234;
@@ -142,6 +157,13 @@ void uinput_emit( int fd, int type, int code, int val ) {
 
 int uinput_press_keys( int fd, int *keyvalues ) {
 
+	/*
+	 * For every key code in the array of keyvalues
+	 * we add it to the block of events first as
+	 * a 'press down' code '1' before pausing
+	 * slighly and then 'releasing' as code '0'
+	 *
+	 */
 	int *kv = keyvalues;
 	while (*kv) {
 		CCDBG fprintf(stderr,"%d ", *kv);
@@ -223,7 +245,7 @@ int tokenise_keycodes( int *keyvalues, int maxvalues, char *keycodes ) {
 
 		if (!p) break;
 
-		hit = strchr(p,':');
+		hit = strchr(p,TOKENISING_CHAR);
 		if ( (hit) || ((!hit) && (*p != '\0')) ) {
 			int temp_keyvalue = -1;
 			if (hit) *hit = '\0';
@@ -390,6 +412,11 @@ int main(int argc, char **argv) {
 			fprintf(stdout, "\r\n"); fflush(stdout);
 		}
 
+		/*
+		 * Initialise the HMC compass IC, set it
+		 * in to automatic generation mode
+		 *
+		 */
 		i2c_write_register_byte(file, 0x00, 0x70);
 		i2c_write_register_byte(file, 0x01, 0xA0);
 		i2c_write_register_byte(file, 0x02, 0x00);
@@ -406,10 +433,33 @@ int main(int argc, char **argv) {
 		while (!exit_program) { 
 			double heading;
 
+			/*
+			 * Read the 6 bytes of data for the 
+			 * x, y and z axis.
+			 *
+			 * NOTE: with this chip, the y axis
+			 * is actually the last pair, not the
+			 * second pair that you might assume
+			 * by default.
+			 *
+			 */
 			i2c_read_register(file, 0x03, buf, 6);
 			x = i2c_twos2dec_16(buf);
 			y = i2c_twos2dec_16(buf +4);
 
+			/*
+			 * Calculate the heading in degrees.
+			 *
+			 * This is only applicable for when the
+			 * sensor is planar/flat to the earth and
+			 * does not factor in any declination 
+			 *
+			 * For the purposes of our task here, it's
+			 * not a problem, as we just adjust our 
+			 * start/end 'angles' according to what we
+			 * see generated when moving the microscope
+			 *
+			 */
 			heading = atan2(x, y) *(180.0 / M_PI);
 			if (heading < 0) heading += 360;
 			heading = 360 -heading;
@@ -419,6 +469,12 @@ int main(int argc, char **argv) {
 				fflush(stdout);
 			}
 
+			/*
+			 * If we transition through the start or end angle
+			 * then generate the required key sequence as a 
+			 * one-shot event.
+			 *
+			 */
 			if ((heading > g->start_angle) && (heading < g->end_angle)) {
 				if (g->scene_state == SCENE_INACTIVE) {
 					g->scene_state = SCENE_ACTIVE;
@@ -433,6 +489,12 @@ int main(int argc, char **argv) {
 				}
 			}
 
+			/*
+			 * No point thrashing the i2c lines when the chip
+			 * itself doesn't update its data registers any faster
+			 * than about 15Hz in the setup we use
+			 *
+			 */
 			usleep(HMC5833L_FRAME_SLEEP);
 		}
 	}
