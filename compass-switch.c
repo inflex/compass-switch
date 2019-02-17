@@ -45,7 +45,7 @@
 #define SCENE_ACTIVE 1
 
 #define VERBOSE if (g->verbose > 0)
-#define DBG if (gdebug > 0)
+#define CCDBG  if (gdebug > 0)
 #define QUIET if (g->quiet > 0)
 
 #define HMC5883L_ID 0x1e
@@ -76,8 +76,8 @@ struct glb {
 
 };
 
-static int gdebug = 0;
-static int exit_program = 0;
+int gdebug = 0;
+int exit_program = 0;
 
 void int_handler(int dummy) {
 	fprintf(stderr,"\nExit requested\n");
@@ -144,23 +144,23 @@ int press_keys( int fd, int *keyvalues ) {
 
 	int *kv = keyvalues;
 	while (*kv) {
-		DBG fprintf(stderr,"%d ", *kv);
+		CCDBG fprintf(stderr,"%d ", *kv);
 		emit(fd, EV_KEY, *kv, 1);
 		kv++;
 	}
 	emit(fd, EV_SYN, SYN_REPORT, 0);
-	DBG fprintf(stderr,"\n");
+	CCDBG fprintf(stderr,"\n");
 
 	usleep(150000);
 
 	kv = keyvalues;
 	while (*kv) {
-		DBG fprintf(stderr,"%d ", *kv);
+		CCDBG fprintf(stderr,"%d ", *kv);
 		emit(fd, EV_KEY, *kv, 0);
 		kv++;
 	}
 	emit(fd, EV_SYN, SYN_REPORT, 0);
-	DBG fprintf(stderr,"\n");
+	CCDBG fprintf(stderr,"\n");
 
 	return 0;
 
@@ -179,7 +179,7 @@ int is_hmc5883( int file ) {
 	int rc = 0;
 
 	rc = i2c_read_register(file, 0x0A, buf, 3); // A, B and C contain our ID
-	DBG fprintf(stderr,"%c %c %c\n", buf[0], buf[1], buf[2]);
+	CCDBG fprintf(stderr,"%c %c %c\n", buf[0], buf[1], buf[2]);
 	if (rc != 3) return 0;
 
 	return (buf[0] == 'H' && buf[1] == '4' && buf[2] == '3');
@@ -206,7 +206,7 @@ void show_help(void) {
 			"\n"
 			"example usage: sudo ./compass-switch -s 90 -e 180 --active-key CTRL:ALT:F6 --inactive-key CTRL:ALT:F7\n"
 			"\n");
-	
+
 }
 
 
@@ -217,20 +217,22 @@ int tokenise_keycodes( int *keyvalues, int maxvalues, char *keycodes ) {
 
 	p = keycodes;
 
+	CCDBG fprintf(stderr,"Decoding %s\n", keycodes);
+
 	do {
-		
+
 		if (!p) break;
 
 		hit = strchr(p,':');
-		if ((hit)||((!hit && (*p != '\0')))) {
+		if ( (hit) || ((!hit) && (*p != '\0')) ) {
 			int temp_keyvalue = -1;
 			if (hit) *hit = '\0';
 			temp_keyvalue = keycode_decode( p );
 			if (temp_keyvalue == -1) {
-				fprintf(stderr,"Unknown keycode '%s'\n", p );
+				CCDBG fprintf(stderr,"Unknown keycode '%s'\n", p );
 			} else {
 				keyvalues[i] = temp_keyvalue;
-				DBG fprintf(stderr," '%s' converted to '%d'\n", p, keyvalues[i]);
+				CCDBG fprintf(stderr," '%s' converted to '%d'\n", p, keyvalues[i]);
 				i++;
 				if (hit) p = hit+1;
 			}
@@ -304,7 +306,7 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					}
 					break;
 
-				case 'd': g->debug = 1; g->verbose = 1; break;
+				case 'd': g->debug = 1; g->verbose = 1;  gdebug = 1; break;
 
 				case 'q': g->quiet = 1; break;
 
@@ -352,19 +354,19 @@ int main(int argc, char **argv) {
 	if (g->ubus) bid = g->ubus;
 
 	do {
-		DBG fprintf(stderr,"Trying i2c bus ID %d...", bid);
+		CCDBG fprintf(stderr,"Trying i2c bus ID %d...", bid);
 		file = i2c_open_bus(bid);
 		if (file > 0) {
 			if (i2c_set_device(file, HMC5883L_ID) >= 0) {
 				if (is_hmc5883(file)) {
-					DBG fprintf(stderr,"Success\n");
+					CCDBG fprintf(stderr,"Success\n");
 					found = 1;
 					break;
 				}
 			}
 			i2c_close_bus(file);
 		}
-		DBG fprintf(stderr,"fail\n");
+		CCDBG fprintf(stderr,"fail\n");
 		if (g->ubus >= 0) break;
 		bid++;
 	} while ((bid < 16) && (!found));
@@ -380,7 +382,7 @@ int main(int argc, char **argv) {
 		unsigned char buf[512];
 		int32_t x, y; // z isn't used in planar compass setup
 
-		DBG {
+		CCDBG  {
 			i2c_read_register(file, 0, buf, 3);
 			for (x = 0; x < 3; x++) {
 				fprintf(stdout, "%02x ", buf[x]);
@@ -392,7 +394,7 @@ int main(int argc, char **argv) {
 		i2c_write_register_byte(file, 0x01, 0xA0);
 		i2c_write_register_byte(file, 0x02, 0x00);
 
-		DBG {
+		CCDBG  {
 			i2c_read_register(file, 0, buf, 3);
 			for (x = 0; x < 3; x++) {
 				fprintf(stdout, "%02x ", buf[x]);
