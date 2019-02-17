@@ -39,6 +39,7 @@
 #include <dirent.h>
 
 #include "i2c.h"
+#include "keycode-decode.h"
 
 #define SCENE_INACTIVE 0
 #define SCENE_ACTIVE 1
@@ -49,6 +50,8 @@
 
 #define HMC5883L_ID 0x1e
 #define HMC5833L_FRAME_SLEEP 80000 // a little more than the 67ms suggested by datasheet
+
+#define MAX_KEYS 5
 
 struct glb {
 	int keyboard;  // file handle for keyboard
@@ -67,6 +70,10 @@ struct glb {
 
 	int kmods; // 0:ctrl, 1:alt, 2:shift
 	int key; // key scan code
+
+	int keys_active[MAX_KEYS+1];
+	int keys_inactive[MAX_KEYS+1];
+
 };
 
 static int gdebug = 0;
@@ -87,14 +94,18 @@ int uinput_done( struct glb *g ) {
 }
 
 int uinput_init( struct glb *g ) {
+	int *kv;
 	g->keyboard = open("/dev/uinput", O_WRONLY|O_NONBLOCK);
 
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_KEY);
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
-	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F5);
-	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_F6);
-	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTSHIFT);
-	ioctl(g->keyboard, UI_SET_KEYBIT, KEY_LEFTCTRL);
+
+	kv = g->keys_active;
+	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); fprintf(stderr,"Adding %d\n", *kv); kv++; }
+
+	kv = g->keys_inactive;
+	while (*kv) { ioctl(g->keyboard, UI_SET_KEYBIT, *kv); fprintf(stderr,"Adding %d\n", *kv); kv++; }
+
 
 	memset(&(g->usetup), 0, sizeof(g->usetup));
 	g->usetup.id.bustype = BUS_USB;
@@ -129,17 +140,27 @@ void emit( int fd, int type, int code, int val ) {
 	}
 }
 
-int press_keys( struct glb *g, int key ) {
+int press_keys( int fd, int *keyvalues ) {
 
-	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 1);
-	emit(g->keyboard, EV_KEY, KEY_LEFTCTRL, 1);
-	emit(g->keyboard, EV_KEY, key, 1);
-	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
+	int *kv = keyvalues;
+	while (*kv) {
+		fprintf(stderr,"%d ", *kv);
+		emit(fd, EV_KEY, *kv, 1);
+		kv++;
+	}
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	fprintf(stderr,"\n");
+
 	usleep(150000);
-	emit(g->keyboard, EV_KEY, key, 0);
-	emit(g->keyboard, EV_KEY, KEY_LEFTSHIFT, 0);
-	emit(g->keyboard, EV_KEY, KEY_LEFTCTRL, 0);
-	emit(g->keyboard, EV_SYN, SYN_REPORT, 0);
+
+	kv = keyvalues;
+	while (*kv) {
+		fprintf(stderr,"%d ", *kv);
+		emit(fd, EV_KEY, *kv, 0);
+		kv++;
+	}
+	emit(fd, EV_SYN, SYN_REPORT, 0);
+	fprintf(stderr,"\n");
 
 	return 0;
 
@@ -165,6 +186,38 @@ int is_hmc5883( int file ) {
 }
 
 void show_help(void) {
+}
+
+
+int tokenise_keycodes( int *keyvalues, int maxvalues, char *keycodes ) {
+
+	char *p, *hit;
+	int i = 0;
+
+	p = keycodes;
+
+	do {
+		
+		if (!p) break;
+
+		hit = strchr(p,':');
+		if ((hit)||((!hit && (*p != '\0')))) {
+			int temp_keyvalue = -1;
+			if (hit) *hit = '\0';
+			temp_keyvalue = keycode_decode( p );
+			if (temp_keyvalue == -1) {
+				fprintf(stderr,"Unknown keycode '%s'\n", p );
+			} else {
+				keyvalues[i] = temp_keyvalue;
+				fprintf(stderr," '%s' converted to '%d'\n", p, keyvalues[i]);
+				i++;
+				if (hit) p = hit+1;
+			}
+		} // hit
+
+	} while ((i < maxvalues) && (hit) && (p) && (*p != '\0'));
+
+	return i;
 }
 
 int parse_parameters( struct glb *g, int argc, char **argv ) {
@@ -219,16 +272,15 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					}
 					break;
 
-				case 'k':
-					i++;
-					if (i < argc) {
-						g->key = atoi(argv[i]);
-					} else {
-						fprintf(stdout,"Insufficient parameters; -k <keyboard code (dec)>\n");
-						exit(1);
+				case '-': // --foo-bar
+					if (strncmp(argv[i], "--active-key", sizeof("--active-key")) == 0) {
+						i++;
+						tokenise_keycodes( g->keys_active, sizeof(g->keys_active), argv[i]);
 					}
-					break;
-
+					if (strncmp(argv[i], "--inactive-key", sizeof("--inactive-key")) == 0) {
+						i++;
+						tokenise_keycodes( g->keys_inactive, sizeof(g->keys_inactive), argv[i]);
+					}
 
 				case 'd': g->debug = 1; g->verbose = 1; break;
 
@@ -260,6 +312,8 @@ int main(int argc, char **argv) {
 	g->start_angle = -1;
 	g->end_angle = -1;
 	g->scene_state = SCENE_INACTIVE;
+	memset(g->keys_active, 0, sizeof(g->keys_active));
+	memset(g->keys_inactive, 0, sizeof(g->keys_inactive));
 
 	signal(SIGINT, int_handler);
 
@@ -340,13 +394,13 @@ int main(int argc, char **argv) {
 				if (g->scene_state == SCENE_INACTIVE) {
 					g->scene_state = SCENE_ACTIVE;
 					VERBOSE fprintf(stdout,"\nACTIVE\n");
-					press_keys( g, KEY_F5 );
+					press_keys( g->keyboard, g->keys_active );
 				}
 			} else {
 				if (g->scene_state == SCENE_ACTIVE) {
 					g->scene_state = SCENE_INACTIVE;
 					VERBOSE fprintf(stdout,"\nIN-ACTIVE\n");
-					press_keys( g, KEY_F6 );
+					press_keys( g->keyboard, g->keys_inactive );
 				}
 			}
 
