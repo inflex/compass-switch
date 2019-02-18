@@ -80,6 +80,7 @@ struct glb {
 };
 
 int gdebug = 0;
+int gkeyboard = -1; // global uinput keyboard device handle, needed so we can clean up via atexit()
 int exit_program = 0;
 
 void int_handler(int dummy) {
@@ -87,13 +88,14 @@ void int_handler(int dummy) {
 	exit_program = 1;
 }
 
-int uinput_done( struct glb *g ) {
-	int r = 0;
-	CCDBG fprintf(stderr,"Cleaning up\n");
-	r = ioctl(g->keyboard, UI_DEV_DESTROY);
-	if (r < 0) fprintf(stderr,"Error cleaning up uinput (%s)\n", strerror(errno));
-	close(g->keyboard);
-	return 0;
+void uinput_done( void ) {
+	if (gkeyboard > 0) {
+		int r = 0;
+		CCDBG fprintf(stderr,"Cleaning up\n");
+		r = ioctl(gkeyboard, UI_DEV_DESTROY);
+		gkeyboard = -1;
+		if (r < 0) fprintf(stderr,"Error cleaning up uinput (%s)\n", strerror(errno));
+	}
 }
 
 int uinput_init( struct glb *g ) {
@@ -390,6 +392,7 @@ int main(int argc, char **argv) {
 	memset(g->keys_inactive, 0, sizeof(g->keys_inactive));
 
 	signal(SIGINT, int_handler);
+	atexit(uinput_done);
 
 	if (argc == 1) {
 		show_help();
@@ -435,6 +438,7 @@ int main(int argc, char **argv) {
 	}
 
 	uinput_init(g);
+	gkeyboard = g->keyboard;
 
 	{
 		unsigned char buf[512];
@@ -547,7 +551,7 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	uinput_done(g);
+	uinput_done();
 
 
 	return 0;
