@@ -90,11 +90,9 @@ void int_handler(int dummy) {
 
 void uinput_done( void ) {
 	if (gkeyboard > 0) {
-		int r = 0;
-		CCDBG fprintf(stderr,"Cleaning up\n");
-		r = ioctl(gkeyboard, UI_DEV_DESTROY);
+		ioctl(gkeyboard, UI_DEV_DESTROY);
+		close(gkeyboard);
 		gkeyboard = -1;
-		if (r < 0) fprintf(stderr,"Error cleaning up uinput (%s)\n", strerror(errno));
 	}
 }
 
