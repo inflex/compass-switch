@@ -52,11 +52,20 @@ int16_t i2c_twos2dec_16( unsigned char *raw ) {
 
 	if ((raw[0] & 0x80) == 0x80) {
 		// high bit is set, negative number
+		result = -(((raw[0]<<8|raw[1]) ^0xffff) +1); 
+		/*
+		 * Below is the original code, kept in here so others
+		 * can know what's going on with the 'compact' version
+		 * above
+		 *
 		raw[0] = ~(raw[0]);
 		raw[1] = ~(raw[1]);
 		tmp = (raw[0] << 8) | raw[1];
 		result = (int16_t)(tmp +1);
 		result = -result;
+
+		 *
+		 */
 
 	} else {
 		// no high bit set, just assemble normally
