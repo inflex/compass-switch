@@ -65,9 +65,11 @@ struct glb {
 	int ubus; // user defined bus
 
 	int scene_state;
+	int scene_pause;
 
 	int start_angle;
 	int end_angle;
+	int hysteresis;
 
 	int kmods; // 0:ctrl, 1:alt, 2:shift
 	int key; // key scan code
@@ -215,6 +217,8 @@ void show_help(void) {
 			"\n"
 			"\t-s <start angle> : Start angle of the active area, 0~360 degrees\n"
 			"\t-e <end angle> : End angle of the active area, 0~360 degrees\n"
+			"\t-y <hysteresis> : Degrees of hysteresis to add to start/end angles (default 5)\n"
+			"\t-p <pause> : How many seconds to wait before permitting another scene change (default 2)\n"
 			"\n"
 			"\t--active-key <keys>\n"
 			"\t--inactive-key <keys>\n"
@@ -317,6 +321,26 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					}
 					break;
 
+				case 'y':
+					i++;
+					if (i < argc) {
+						g->hysteresis = atoi(argv[i]);
+					} else {
+						fprintf(stdout,"Insufficient parameters; -h <hysteresis (0..360)>\n");
+						exit(1);
+					}
+					break;
+
+				case 'p':
+					i++;
+					if (i < argc) {
+						g->scene_pause = atoi(argv[i]);
+					} else {
+						fprintf(stdout,"Insufficient parameters; -p <scene change sleep/wait>\n");
+						exit(1);
+					}
+					break;
+
 				case '-': // --foo-bar
 					if (strncmp(argv[i], "--active-key", sizeof("--active-key")) == 0) {
 						i++;
@@ -348,6 +372,7 @@ int main(int argc, char **argv) {
 	int file;
 	int bid = 0;
 	int found = 0;
+	int current_start_angle, current_end_angle;
 	struct glb gg;
 	struct glb *g = &gg;
 
@@ -357,6 +382,9 @@ int main(int argc, char **argv) {
 	g->ubus = -1;
 	g->start_angle = -1;
 	g->end_angle = -1;
+	g->scene_pause = 2;
+	g->hysteresis = 5;
+
 	g->scene_state = SCENE_INACTIVE;
 	memset(g->keys_active, 0, sizeof(g->keys_active));
 	memset(g->keys_inactive, 0, sizeof(g->keys_inactive));
@@ -369,6 +397,14 @@ int main(int argc, char **argv) {
 	}
 
 	parse_parameters(g, argc, argv);
+
+	if ((g->start_angle == -1)||(g->end_angle == -1)) {
+		fprintf(stderr,"Start AND End angles must be set\n");
+		exit(1);
+	}
+
+	current_end_angle = g->end_angle;
+	current_start_angle = g->start_angle;
 
 	gdebug = g->debug;
 
@@ -475,17 +511,29 @@ int main(int argc, char **argv) {
 			 * one-shot event.
 			 *
 			 */
-			if ((heading > g->start_angle) && (heading < g->end_angle)) {
+			if ((heading > current_start_angle) && (heading < current_end_angle)) {
 				if (g->scene_state == SCENE_INACTIVE) {
+
+					current_start_angle = g->start_angle -g->hysteresis;
+					if (current_start_angle < 0) current_start_angle = 360 -current_start_angle;
+					current_end_angle = (g->end_angle +g->hysteresis) %360;
+
 					g->scene_state = SCENE_ACTIVE;
-					VERBOSE fprintf(stdout,"\nACTIVE\n");
+					VERBOSE fprintf(stdout,"\nACTIVE, pause for %d second(s)\n", g->scene_pause);
 					uinput_press_keys( g->keyboard, g->keys_active );
+					sleep(g->scene_pause);
 				}
 			} else {
 				if (g->scene_state == SCENE_ACTIVE) {
 					g->scene_state = SCENE_INACTIVE;
-					VERBOSE fprintf(stdout,"\nIN-ACTIVE\n");
+
+					current_start_angle = (g->start_angle +g->hysteresis) %360;
+					current_end_angle = g->end_angle -g->hysteresis;
+					if (current_end_angle < 0) current_end_angle = 360 -current_end_angle;
+
+					VERBOSE fprintf(stdout,"\nIN-ACTIVE, pause for %d second(s)\n", g->scene_pause);
 					uinput_press_keys( g->keyboard, g->keys_inactive );
+					sleep(g->scene_pause);
 				}
 			}
 
