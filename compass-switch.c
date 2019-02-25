@@ -53,6 +53,7 @@
 
 #define MAX_KEYS 5
 #define TOKENISING_CHAR ':'   // some people might prefer '_' or '+' etc
+#define RAA_MAX_SIZE 100 // number of samples to average in noisy environment
 
 struct glb {
 	int keyboard;  // file handle for keyboard
@@ -70,6 +71,7 @@ struct glb {
 	int start_angle;
 	int end_angle;
 	int hysteresis;
+	int samples;
 
 	int kmods; // 0:ctrl, 1:alt, 2:shift
 	int key; // key scan code
@@ -98,7 +100,13 @@ void uinput_done( void ) {
 
 int uinput_init( struct glb *g ) {
 	int *kv;
+	int r;
 	g->keyboard = open("/dev/uinput", O_WRONLY|O_NONBLOCK);
+	//g->keyboard = open("/dev/uinput", O_WRONLY|O_NDELAY);
+	if (g->keyboard == -1) { 
+		fprintf(stderr,"Unable to open uinput device (%s)\n", strerror(errno));
+		exit (1);
+	}
 
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_KEY);
 	ioctl(g->keyboard, UI_SET_EVBIT, EV_SYN);
@@ -130,8 +138,16 @@ int uinput_init( struct glb *g ) {
 	g->usetup.id.product = 0x5678;
 	strcpy(g->usetup.name, "HMC5833L Compass Switch");
 
-	ioctl(g->keyboard, UI_DEV_SETUP, &g->usetup);
-	ioctl(g->keyboard, UI_DEV_CREATE);
+	r = ioctl(g->keyboard, UI_DEV_SETUP, &g->usetup);
+	if (r == -1) {
+		fprintf(stderr,"Unable to setup keyboard device (%s)\n", strerror(errno));
+		return 0;
+	}
+	r = ioctl(g->keyboard, UI_DEV_CREATE);
+	if (r == -1) {
+		fprintf(stderr,"Unable to create keyboard device (%s)\n", strerror(errno));
+		return 0;
+	}
 
 	return 0;
 }
@@ -153,7 +169,7 @@ void uinput_emit( int fd, int type, int code, int val ) {
 
 	bc = write(fd, &ie, sizeof(ie));
 	if (bc != sizeof(ie)) {
-		fprintf(stderr,"Attempted to write %ld bytes to keyboard event queue, only wrote %ld\n", sizeof(ie), bc);
+		fprintf(stderr,"Attempted to write %ld bytes to keyboard event queue, only wrote %ld (%s)\n", sizeof(ie), bc, strerror(errno));
 	}
 }
 
@@ -218,6 +234,7 @@ void show_help(void) {
 			"\t-s <start angle> : Start angle of the active area, 0~360 degrees\n"
 			"\t-e <end angle> : End angle of the active area, 0~360 degrees\n"
 			"\t-y <hysteresis> : Degrees of hysteresis to add to start/end angles (default 5)\n"
+			"\t-m <samples> : Average sensor angle over number of samples (1-100)\n"
 			"\t-p <pause> : How many seconds to wait before permitting another scene change (default 2)\n"
 			"\n"
 			"\t--active-key <keys>\n"
@@ -326,7 +343,17 @@ int parse_parameters( struct glb *g, int argc, char **argv ) {
 					if (i < argc) {
 						g->hysteresis = atoi(argv[i]);
 					} else {
-						fprintf(stdout,"Insufficient parameters; -h <hysteresis (0..360)>\n");
+						fprintf(stdout,"Insufficient parameters; -y <hysteresis (0..360)>\n");
+						exit(1);
+					}
+					break;
+
+				case 'm':
+					i++;
+					if (i < argc) {
+						g->samples = atoi(argv[i]);
+					} else {
+						fprintf(stdout,"Insufficient parameters; -m <samples>\n");
 						exit(1);
 					}
 					break;
@@ -375,6 +402,12 @@ int main(int argc, char **argv) {
 	int current_start_angle, current_end_angle;
 	struct glb gg;
 	struct glb *g = &gg;
+	double raa[RAA_MAX_SIZE]; // allow up to 100 samples
+	int raip; // rolling average index pointer
+	int racount;
+
+	raip = 0;
+	racount = 0;
 
 	g->debug = 0;
 	g->verbose = 0;
@@ -383,7 +416,8 @@ int main(int argc, char **argv) {
 	g->start_angle = -1;
 	g->end_angle = -1;
 	g->scene_pause = 2;
-	g->hysteresis = 5;
+	g->hysteresis = 2;
+	g->samples = 1;
 
 	g->scene_state = SCENE_INACTIVE;
 	memset(g->keys_active, 0, sizeof(g->keys_active));
@@ -398,6 +432,10 @@ int main(int argc, char **argv) {
 	}
 
 	parse_parameters(g, argc, argv);
+
+	if (g->samples > RAA_MAX_SIZE) {
+		g->samples = RAA_MAX_SIZE;
+	}
 
 	if ((g->start_angle == -1)||(g->end_angle == -1)) {
 		fprintf(stderr,"Start AND End angles must be set\n");
@@ -501,6 +539,18 @@ int main(int argc, char **argv) {
 			heading = atan2(x, y) *(180.0 / M_PI);
 			if (heading < 0) heading += 360;
 			heading = 360 -heading;
+
+			if (g->samples > 1) { 
+				int i;
+				raa[raip] = heading;
+				raip = (raip+1)%g->samples;
+				if (racount < g->samples) racount++;
+				for (i = 0; i < racount; i++) {
+					heading += raa[i];
+				}
+				heading /= racount;
+			}
+
 
 			VERBOSE {
 				fprintf(stdout,"\r%03.1f ", heading);
